@@ -7,7 +7,7 @@ from plotly.subplots import make_subplots
 
 # ─── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Sabermetría MLB 2023",
+    page_title="Sabermetría MLB",
     page_icon="⚾",
     layout="wide",
     initial_sidebar_state="expanded",
