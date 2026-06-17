@@ -171,4 +171,4 @@ def load_api_sabermetrics():
     df_saber["SLG"] = (tb / df_saber["AB"]).round(3)
     df_saber["OPS"] = (df_saber["OBP"] + df_saber["SLG"]).round(3)
     df_saber["ISO"] = (df_saber["SLG"] - df_saber["AVG"]).round(3)
-    df_saber["BABIP"] = ((df_saber["H"] - df_saber
+    df_saber["BABIP"] = ((df_saber["H"] - df_saber)
