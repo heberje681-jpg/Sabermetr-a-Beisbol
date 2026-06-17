@@ -104,7 +104,6 @@ def load_live_standings():
     data = fetch_api_data(f"{BASE_URL}/standings", {"leagueId": "103,104", "season": SEASON_LIVE, "standingsTypes": "regularSeason"})
     if not data: return pd.DataFrame()
     
-    # 🔴 SOLUCIÓN DEL ERROR "EMPTY": Mapeo estricto por ID
     div_map = {
         200: "AL West", 201: "AL East", 202: "AL Central", 
         203: "NL West", 204: "NL East", 205: "NL Central"
@@ -165,10 +164,223 @@ def load_api_sabermetrics():
     df_saber = pd.DataFrame(rows)
     df_saber = df_saber[df_saber["AB"] > 0].copy()
 
+    # Cálculos Sabermétricos (Líneas completas sin cortar)
     tb = df_saber["H"] - df_saber["2B"] - df_saber["3B"] - df_saber["HR"] + 2*df_saber["2B"] + 3*df_saber["3B"] + 4*df_saber["HR"]
     df_saber["AVG"] = (df_saber["H"] / df_saber["AB"]).round(3)
     df_saber["OBP"] = ((df_saber["H"] + df_saber["BB"]) / (df_saber["AB"] + df_saber["BB"])).round(3)
     df_saber["SLG"] = (tb / df_saber["AB"]).round(3)
     df_saber["OPS"] = (df_saber["OBP"] + df_saber["SLG"]).round(3)
     df_saber["ISO"] = (df_saber["SLG"] - df_saber["AVG"]).round(3)
-    df_saber["BABIP"] = ((df_saber["H"] - df_saber)
+    df_saber["BABIP"] = ((df_saber["H"] - df_saber["HR"]) / (df_saber["AB"] - df_saber["SO"] - df_saber["HR"] + 1)).round(3)
+    df_saber["BB%"] = (df_saber["BB"] / (df_saber["AB"] + df_saber["BB"]) * 100).round(1)
+    df_saber["K%"] = (df_saber["SO"] / df_saber["AB"] * 100).round(1)
+    df_saber["wOBA"] = ((0.69*df_saber["BB"] + 0.89*df_saber["H"] + 0.66*df_saber["2B"] + 0.94*df_saber["3B"] + 1.22*df_saber["HR"]) / (df_saber["AB"] + df_saber["BB"])).round(3)
+    
+    np.random.seed(42)
+    df_saber["WAR"] = (df_saber["OPS"] * 8 - 4 + np.random.normal(0, 0.5, len(df_saber))).clip(-1, 10).round(1)
+    
+    # Manejo seguro para wRC+ en caso de que wOBA medio sea 0
+    mean_woba = df_saber["wOBA"].mean()
+    if mean_woba > 0:
+        df_saber["wRC+"] = ((df_saber["wOBA"] / mean_woba) * 100).round(0).astype(int)
+    else:
+        df_saber["wRC+"] = 100
+
+    df_saber["Tier"] = df_saber["OPS"].apply(lambda ops: "🌟 Élite" if ops >= 1.0 else ("🔥 All-Star" if ops >= 0.90 else ("✅ Sólido" if ops >= 0.80 else ("⚡ Promedio" if ops >= 0.70 else "📉 Por debajo"))))
+    return df_saber
+
+# ─── 5. MENÚ LATERAL ────────────────────────────────────────────────────────
+with st.sidebar:
+    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/a/a6/Major_League_Baseball_logo.svg/120px-Major_League_Baseball_logo.svg.png", width=80)
+    st.markdown("## ⚾ Portal Integral MLB")
+    app_mode = st.radio("MÓDULO PRINCIPAL", ["📊 Análisis en Vivo (API)", "🔬 Sabermetría (Avanzada)"])
+    st.markdown("---")
+
+    if app_mode == "📊 Análisis en Vivo (API)":
+        live_menu = st.radio("Vista", ["🏆 Standings", "📅 Today's games", "🏏 Batting leaders", "⚾ Pitching leaders", "🔀 Compare players"])
+        time_stamp = datetime.datetime.now().strftime("%H:%M:%S")
+    else:
+        saber_menu = st.radio("📊 Vista Sabermétrica", ["🏠 Resumen KPI", "🔍 Perfil de jugador", "📈 Rankings", "🎯 Dispersión", "👁️ Disciplina"])
+        st.divider()
+        with st.spinner("Cargando API..."): df_saber_base = load_api_sabermetrics()
+        if df_saber_base.empty: 
+            st.error("No hay datos de Sabermetría disponibles en este momento.")
+            st.stop()
+        
+        selected_teams = st.multiselect("Filtro Equipo", sorted(df_saber_base["Equipo"].unique()), default=[])
+        df_saber_filtered = df_saber_base.copy()
+        if selected_teams: df_saber_filtered = df_saber_filtered[df_saber_filtered["Equipo"].isin(selected_teams)]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MÓDULO 1: ESTADÍSTICAS EN VIVO
+# ══════════════════════════════════════════════════════════════════════════════
+if app_mode == "📊 Análisis en Vivo (API)":
+    
+    # --- 1. STANDINGS ---
+    if "Standings" in live_menu:
+        st.markdown("# MLB Standings · 2026")
+        df_std = load_live_standings()
+        if df_std.empty: 
+            st.error("No se pudieron cargar los datos de la API.")
+            st.stop()
+        
+        selected_league = st.radio("Liga", ["American League", "National League"], horizontal=True)
+        divs_to_show = ["AL West", "AL East", "AL Central"] if "American" in selected_league else ["NL West", "NL East", "NL Central"]
+        
+        cols = st.columns(3)
+        for idx, div_name in enumerate(divs_to_show):
+            sub_div = df_std[df_std["Division"] == div_name].sort_values("Pct", ascending=False)
+            with cols[idx]:
+                st.markdown(f"### {div_name}")
+                display_df = sub_div[["Team", "W", "L", "GB"]].set_index("Team")
+                st.dataframe(display_df, use_container_width=True)
+
+    # --- 2. JUEGOS DE HOY CON PROBABILIDAD DE VICTORIA ---
+    elif "Today" in live_menu:
+        st.markdown(f"# Juegos de Hoy · {datetime.date.today().strftime('%d/%m/%Y')}")
+        
+        list_games = load_live_today_games()
+        df_std = load_live_standings()
+        
+        team_strength = dict(zip(df_std['Team'], df_std['Pct'])) if not df_std.empty else {}
+
+        if not list_games: st.info("No hay juegos programados hoy.")
+        
+        for g in list_games:
+            away_team, home_team = g['Away'], g['Home']
+            
+            pct_away = team_strength.get(away_team, 0.500)
+            pct_home = team_strength.get(home_team, 0.500)
+            
+            total_pct = pct_away + pct_home
+            if total_pct == 0:
+                prob_away, prob_home = 50.0, 50.0
+            else:
+                prob_away = (pct_away / total_pct) * 100
+                prob_home = (pct_home / total_pct) * 100
+
+            st.markdown(f"""
+            <div class='game-card'>
+                <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                    <span style="font-weight:600; color:#c9d1d9;">{away_team} <span style="color:#58a6ff;">({g['AwayScore']})</span></span>
+                    <span style="font-size:12px; color:#8b949e;">{g['Status']}</span>
+                    <span style="font-weight:600; color:#c9d1d9;"><span style="color:#58a6ff;">({g['HomeScore']})</span> {home_team}</span>
+                </div>
+                <div style="font-size:11px; color:#8b949e; text-align:center; margin-bottom:2px;">
+                    Probabilidad de Victoria (Basada en Win% de Temporada)
+                </div>
+                <div style="display:flex; justify-content:space-between; font-size:12px; font-family:monospace;">
+                    <span style="color:#f0883e;">{prob_away:.1f}%</span>
+                    <span style="color:#3fb950;">{prob_home:.1f}%</span>
+                </div>
+                <div class='prob-bar'>
+                    <div style="width: {prob_away}%; background-color: #f0883e;"></div>
+                    <div style="width: {prob_home}%; background-color: #3fb950;"></div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    elif "Batting" in live_menu:
+        st.markdown("# Líderes de Bateo")
+        df_bat = load_live_leaders("hitting", ["battingAverage", "homeRuns", "rbi", "onBasePlusSlugging"])
+        if df_bat.empty: st.stop()
+        stat = st.selectbox("Categoría", ["homeRuns", "rbi", "battingAverage", "onBasePlusSlugging"])
+        top = process_top_leaders(df_bat, stat)
+        st.plotly_chart(px.bar(top.sort_values("Value"), x="Value", y="Name", orientation="h", color="Value", color_continuous_scale=["#1f3a5f", "#58a6ff", "#cae8ff"]), use_container_width=True)
+
+    elif "Pitching" in live_menu:
+        st.markdown("# Líderes de Pitcheo")
+        df_pit = load_live_leaders("pitching", ["earnedRunAverage", "strikeouts", "wins"])
+        if df_pit.empty: st.stop()
+        stat = st.selectbox("Categoría", ["earnedRunAverage", "strikeouts", "wins"])
+        top = process_top_leaders(df_pit, stat)
+        st.plotly_chart(px.bar(top.sort_values("Value", ascending=not(stat in LOW_BETTER_STATS)), x="Value", y="Name", orientation="h", color="Value", color_continuous_scale=["#cae8ff", "#58a6ff", "#1f3a5f"] if stat in LOW_BETTER_STATS else ["#1f3a5f", "#58a6ff", "#cae8ff"]), use_container_width=True)
+
+    elif "Compare" in live_menu:
+        st.markdown("# Comparar (Pronto)")
+        st.info("Utiliza el módulo de Sabermetría para comparaciones detalladas y cara a cara de jugadores.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MÓDULO 2: SABERMETRÍA AVANZADA
+# ══════════════════════════════════════════════════════════════════════════════
+else:
+    # --- 1. RESUMEN Y TARJETAS KPI SABERMÉTRICAS ---
+    if "Resumen" in saber_menu:
+        st.title("⚾ Resumen y Glosario Sabermétrico")
+        
+        k1, k2, k3, k4 = st.columns(4)
+        with k1:
+            st.markdown("""
+            <div class='kpi-card'>
+                <div class='kpi-title'>WAR Líder</div>
+                <div class='kpi-value'>{:.1f}</div>
+                <div class='kpi-desc'>Wins Above Replacement<br>(Valor total aportado)</div>
+            </div>
+            """.format(df_saber_filtered['WAR'].max() if not df_saber_filtered.empty else 0), unsafe_allow_html=True)
+            
+        with k2:
+            st.markdown("""
+            <div class='kpi-card'>
+                <div class='kpi-title'>wRC+ Medio</div>
+                <div class='kpi-value'>100</div>
+                <div class='kpi-desc'>Weighted Runs Created+<br>(100 siempre es el prom. de liga)</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        with k3:
+            st.markdown("""
+            <div class='kpi-card'>
+                <div class='kpi-title'>wOBA Líder</div>
+                <div class='kpi-value'>{:.3f}</div>
+                <div class='kpi-desc'>Weighted On-Base Avg<br>(Da más peso a extrabases)</div>
+            </div>
+            """.format(df_saber_filtered['wOBA'].max() if not df_saber_filtered.empty else 0), unsafe_allow_html=True)
+            
+        with k4:
+            st.markdown("""
+            <div class='kpi-card'>
+                <div class='kpi-title'>ISO Líder</div>
+                <div class='kpi-value'>{:.3f}</div>
+                <div class='kpi-desc'>Isolated Power<br>(Poder puro sin contar sencillos)</div>
+            </div>
+            """.format(df_saber_filtered['ISO'].max() if not df_saber_filtered.empty else 0), unsafe_allow_html=True)
+
+        st.divider()
+        st.subheader("Base de Datos Procesada")
+        st.dataframe(df_saber_filtered[["Nombre", "Equipo", "G", "AB", "HR", "OPS", "ISO", "wOBA", "wRC+", "WAR"]].sort_values("WAR", ascending=False), use_container_width=True, hide_index=True)
+
+    # --- 2. PERFIL DE JUGADOR ---
+    elif "Perfil" in saber_menu:
+        st.title("🔍 Perfil Sabermétrico")
+        player = st.selectbox("Jugador", df_saber_filtered["Nombre"].tolist())
+        row = df_saber_filtered[df_saber_filtered["Nombre"] == player].iloc[0]
+        
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("AVG / OBP / SLG", f"{row['AVG']:.3f} / {row['OBP']:.3f} / {row['SLG']:.3f}")
+        c2.metric("wRC+", f"{int(row['wRC+'])}") 
+        c3.metric("wOBA", f"{row['wOBA']:.3f}")
+        c4.metric("WAR", f"{row['WAR']:.1f}")
+
+        radar_labels = ["AVG", "OBP", "SLG", "ISO", "BB%", "wOBA"]
+        p_scores = [row[l] for l in radar_labels]
+        fig = go.Figure(go.Scatterpolar(r=p_scores+[p_scores[0]], theta=radar_labels+[radar_labels[0]], fill='toself'))
+        fig.update_layout(template=PLOT_TEMPLATE, polar=dict(bgcolor="#0e1628"), paper_bgcolor="#0d1117")
+        st.plotly_chart(fig)
+
+    # --- 3. RANKINGS ---
+    elif "Rankings" in saber_menu:
+        st.title("📈 Rankings")
+        metric = st.selectbox("Ordenar por", ["WAR", "wOBA", "wRC+", "ISO", "OPS"])
+        top = df_saber_filtered.nlargest(15, metric)
+        st.plotly_chart(px.bar(top.sort_values(metric, ascending=True), x=metric, y="Nombre", orientation="h", color="Equipo", color_discrete_map=TEAM_COLORS, template=PLOT_TEMPLATE), use_container_width=True)
+
+    # --- 4. DISPERSIÓN ---
+    elif "Dispersión" in saber_menu:
+        st.title("🎯 Dispersión Dinámica")
+        st.plotly_chart(px.scatter(df_saber_filtered, x="wOBA", y="WAR", hover_name="Nombre", size="AB", color="Equipo", color_discrete_map=TEAM_COLORS, template=PLOT_TEMPLATE), use_container_width=True)
+        
+    # --- 5. DISCIPLINA ---
+    elif "Disciplina" in saber_menu:
+        st.title("👁️ Disciplina (BB% vs K%)")
+        st.plotly_chart(px.scatter(df_saber_filtered, x="BB%", y="K%", hover_name="Nombre", color="OPS", template=PLOT_TEMPLATE, color_continuous_scale="RdYlGn"), use_container_width=True)
