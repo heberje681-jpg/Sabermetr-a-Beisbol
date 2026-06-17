@@ -198,7 +198,7 @@ def load_api_sabermetrics():
 with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/a/a6/Major_League_Baseball_logo.svg/120px-Major_League_Baseball_logo.svg.png", width=80)
     st.markdown("## ⚾ Portal Integral MLB")
-    app_mode = st.radio("MÓDULO PRINCIPAL", ["📊 Análisis en Vivo (API)", "🔬 Sabermetría (Avanzada)"])
+    app_mode = st.radio("MÓDULO PRINCIPAL", ["📊 Análisis en Vivo", "🔬 Sabermetría (Avanzada)"])
     st.markdown("---")
 
     if app_mode == "📊 Análisis en Vivo (API)":
@@ -219,7 +219,7 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════════════════
 # MÓDULO 1: ESTADÍSTICAS EN VIVO
 # ══════════════════════════════════════════════════════════════════════════════
-if app_mode == "📊 Análisis en Vivo (API)":
+if app_mode == "📊 Análisis en Vivo":
     
     # --- 1. STANDINGS (Corregido para mostrar Streak y Pct) ---
     if "Standings" in live_menu:
