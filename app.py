@@ -114,9 +114,11 @@ def load_live_standings():
         div_name = div_map.get(div_id, "Desconocida")
         
         for t in rec.get("teamRecords", []):
+            # EXTRAEMOS EL TEAM ID PARA EVITAR EL ERROR DEL 50-50
             rows.append({
                 "Division": div_name, 
                 "Team": t.get("team", {}).get("name", ""), 
+                "TeamID": t.get("team", {}).get("id", 0), 
                 "W": t.get("wins", 0),
                 "L": t.get("losses", 0), 
                 "Pct": float(t.get("winningPercentage", 0)), 
@@ -138,9 +140,14 @@ def load_live_today_games():
             away, home = g.get("teams", {}).get("away", {}), g.get("teams", {}).get("home", {})
             games.append({
                 "Status": g.get("status", {}).get("detailedState", ""),
-                "Away": away.get("team", {}).get("name", ""), "AwayScore": away.get("score", "–"),
-                "Home": home.get("team", {}).get("name", ""), "HomeScore": home.get("score", "–"),
-                "Inning": g.get("linescore", {}).get("currentInningOrdinal", ""), "Venue": g.get("venue", {}).get("name", "")
+                "Away": away.get("team", {}).get("name", ""), 
+                "AwayID": away.get("team", {}).get("id", 0),
+                "AwayScore": away.get("score", "–"),
+                "Home": home.get("team", {}).get("name", ""), 
+                "HomeID": home.get("team", {}).get("id", 0),
+                "HomeScore": home.get("score", "–"),
+                "Inning": g.get("linescore", {}).get("currentInningOrdinal", ""), 
+                "Venue": g.get("venue", {}).get("name", "")
             })
     return games
 
@@ -164,7 +171,6 @@ def load_api_sabermetrics():
     df_saber = pd.DataFrame(rows)
     df_saber = df_saber[df_saber["AB"] > 0].copy()
 
-    # Cálculos Sabermétricos (Líneas completas sin cortar)
     tb = df_saber["H"] - df_saber["2B"] - df_saber["3B"] - df_saber["HR"] + 2*df_saber["2B"] + 3*df_saber["3B"] + 4*df_saber["HR"]
     df_saber["AVG"] = (df_saber["H"] / df_saber["AB"]).round(3)
     df_saber["OBP"] = ((df_saber["H"] + df_saber["BB"]) / (df_saber["AB"] + df_saber["BB"])).round(3)
@@ -179,7 +185,6 @@ def load_api_sabermetrics():
     np.random.seed(42)
     df_saber["WAR"] = (df_saber["OPS"] * 8 - 4 + np.random.normal(0, 0.5, len(df_saber))).clip(-1, 10).round(1)
     
-    # Manejo seguro para wRC+ en caso de que wOBA medio sea 0
     mean_woba = df_saber["wOBA"].mean()
     if mean_woba > 0:
         df_saber["wRC+"] = ((df_saber["wOBA"] / mean_woba) * 100).round(0).astype(int)
@@ -216,7 +221,7 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════════════════
 if app_mode == "📊 Análisis en Vivo (API)":
     
-    # --- 1. STANDINGS ---
+    # --- 1. STANDINGS (Corregido para mostrar Streak y Pct) ---
     if "Standings" in live_menu:
         st.markdown("# MLB Standings · 2026")
         df_std = load_live_standings()
@@ -232,25 +237,31 @@ if app_mode == "📊 Análisis en Vivo (API)":
             sub_div = df_std[df_std["Division"] == div_name].sort_values("Pct", ascending=False)
             with cols[idx]:
                 st.markdown(f"### {div_name}")
-                display_df = sub_div[["Team", "W", "L", "GB"]].set_index("Team")
+                # AHORA SÍ INCLUIMOS Pct y Streak
+                display_df = sub_div[["Team", "W", "L", "Pct", "GB", "Streak"]].copy()
+                display_df["Pct"] = display_df["Pct"].apply(lambda val: f"{val:.3f}".replace("0.", "."))
+                display_df = display_df.set_index("Team")
                 st.dataframe(display_df, use_container_width=True)
 
-    # --- 2. JUEGOS DE HOY CON PROBABILIDAD DE VICTORIA ---
+    # --- 2. JUEGOS DE HOY CON PROBABILIDAD DE VICTORIA (Corregido por TeamID) ---
     elif "Today" in live_menu:
         st.markdown(f"# Juegos de Hoy · {datetime.date.today().strftime('%d/%m/%Y')}")
         
         list_games = load_live_today_games()
         df_std = load_live_standings()
         
-        team_strength = dict(zip(df_std['Team'], df_std['Pct'])) if not df_std.empty else {}
+        # Diccionario de fuerza de equipos basado estrictamente en el TeamID para evitar errores de nombres
+        team_strength = dict(zip(df_std['TeamID'], df_std['Pct'])) if not df_std.empty else {}
 
         if not list_games: st.info("No hay juegos programados hoy.")
         
         for g in list_games:
             away_team, home_team = g['Away'], g['Home']
+            away_id, home_id = g['AwayID'], g['HomeID']
             
-            pct_away = team_strength.get(away_team, 0.500)
-            pct_home = team_strength.get(home_team, 0.500)
+            # Buscar el Win% por su ID único
+            pct_away = team_strength.get(away_id, 0.500)
+            pct_home = team_strength.get(home_id, 0.500)
             
             total_pct = pct_away + pct_home
             if total_pct == 0:
